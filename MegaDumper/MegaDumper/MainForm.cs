@@ -123,7 +123,6 @@ namespace Mega_Dumper
             public IntPtr BaseAddress;
             public IntPtr AllocationBase;
             public uint AllocationProtect;
-            public ushort PartitionId;
             public IntPtr RegionSize;
             public uint State;
             public uint Protect;
@@ -1979,9 +1978,9 @@ namespace Mega_Dumper
             // The Ultimate Heuristic: Ask the Windows kernel if this process dynamically booted the CLR!
             // Defeats FakeNet-NG (fake PE header) and Enigma (stripped PE header + manually mapped CLR).
             bool isProcessDynamicallyManaged = false;
+            Console.WriteLine("[INFO] Checking if process is dynamically managed (CLR)...");
             try
             {
-                Console.WriteLine("[INFO] Checking if process is dynamically managed (CLR)...");
                 Mega_Dumper.ICorPublish publish = (Mega_Dumper.ICorPublish)new Mega_Dumper.CorpubPublish();
                 if (publish != null)
                 {
@@ -1991,9 +1990,35 @@ namespace Mega_Dumper
                         ppProcess.IsManaged(out isProcessDynamicallyManaged);
                     }
                 }
-                Console.WriteLine($"[INFO] Managed status: {isProcessDynamicallyManaged}");
             }
-            catch (Exception ex) { Console.WriteLine($"[DEBUG] ICorPublish check failed: {ex.Message}"); }
+            catch (Exception ex) 
+            { 
+                Console.WriteLine($"[DEBUG] ICorPublish check failed: {ex.Message}. Falling back to kernel/module inspection..."); 
+            }
+
+            // Kernel/Module Inspection Fallback
+            if (!isProcessDynamicallyManaged)
+            {
+                try
+                {
+                    using (var proc = Process.GetProcessById((int)processId))
+                    {
+                        foreach (ProcessModule mod in proc.Modules)
+                        {
+                            string modName = mod.ModuleName.ToLower();
+                            if (modName == "clr.dll" || modName == "mscorlib.dll" || modName == "coreclr.dll" || modName == "mscoree.dll")
+                            {
+                                isProcessDynamicallyManaged = true;
+                                Console.WriteLine($"[INFO] Managed status: True (Detected {mod.ModuleName} in process modules)");
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (Exception modEx) { Console.WriteLine($"[DEBUG] Module inspection failed: {modEx.Message}"); }
+            }
+
+            Console.WriteLine($"[INFO] Managed status: {isProcessDynamicallyManaged}");
 
             if (hProcess == IntPtr.Zero)
             {
