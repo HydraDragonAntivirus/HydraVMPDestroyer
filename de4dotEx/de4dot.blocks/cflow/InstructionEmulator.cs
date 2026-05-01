@@ -532,7 +532,7 @@ namespace de4dot.blocks.cflow {
         void Emulate_Newarr(Instruction instr)
         {
             var val = valueStack.Pop();
-            if (val.IsInt32() && val is Int32Value { Value: < 500000 } arrSize)
+            if (val.IsInt32() && val is Int32Value { Value: >= 0 and < 500000 } arrSize)
             {
                 List<Value> arr = new List<Value>(arrSize.Value);
                 for (int i = 0; i < arrSize.Value; i++) {

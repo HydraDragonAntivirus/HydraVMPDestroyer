@@ -1547,7 +1547,7 @@ namespace Mega_Dumper
         [DllImport("advapi32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern int SetSecurityInfo(int HANDLE, int SE_OBJECT_TYPE, int SECURITY_INFORMATION, int psidOwner, int psidGroup, IntPtr pDACL, IntPtr pSACL);
 
-        internal void EnableDebuggerPrivileges()
+        public void EnableDebuggerPrivileges()
         {
             try
             {
