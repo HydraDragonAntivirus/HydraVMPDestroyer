@@ -18,84 +18,118 @@ namespace HydraVMPDestroyer.App
             Console.WriteLine("   VMP Unpacker + MegaDumper + de4dotEx");
             Console.WriteLine("=================================================");
 
-            if (args.Length < 1)
-            {
-                Console.WriteLine("[USAGE] HydraVMPDestroyer.App.exe <target_vmp_exe>");
-                return 1;
-            }
-
-            string inputFilePath = Path.GetFullPath(args[0]);
-            if (!File.Exists(inputFilePath))
-            {
-                Console.WriteLine($"[ERROR] File not found: {inputFilePath}");
-                return 1;
-            }
-
             Console.WriteLine($"[INFO] Runtime Architecture: {(IntPtr.Size == 8 ? "x64" : "x86")}");
             Console.WriteLine("[!] Note: Specifically for .NET VMProtect executables.");
 
-            string outputDir = Path.GetDirectoryName(inputFilePath);
-            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            string dumpPath = Path.Combine(outputDir, $"Dumps_{timestamp}");
-            
-            Directory.CreateDirectory(dumpPath);
-
-            Console.WriteLine("\n[INFO] Starting Dynamic Analysis Mode...");
-            
-            ProcessStartInfo startInfo = new ProcessStartInfo(inputFilePath);
-            startInfo.WorkingDirectory = outputDir;
-            
-            Process process = Process.Start(startInfo);
-            Console.WriteLine($"[INFO] Process started (PID: {process.Id}). Waiting 5 seconds for initialization...");
-            await Task.Delay(5000);
+            // Hardcoded dump directory - matches MegaDumper GUI default output
+            string dumpsDir = @"C:\Dumps";
 
             bool success = false;
             string currentTarget = "";
 
-            try
+            // -----------------------------------------------
+            // MODE 1: No argument → GUI Mode
+            // MegaDumper GUI already ran and dumped to C:\Dumps\dumps
+            // We just pick up the files and run de4dotEx on them.
+            // -----------------------------------------------
+            if (args.Length < 1)
             {
-                Mega_Dumper.MainForm megaDumper = new Mega_Dumper.MainForm();
-                string dumpResult = await megaDumper.DumpProcessByIdCli((uint)process.Id, dumpPath);
-                Console.WriteLine($"[INFO] MegaDumper finished: {dumpResult}");
-                
-                string dumpsDir = Path.Combine(dumpPath, "dumps");
-                if (Directory.Exists(dumpsDir))
-                {
-                    // Recursive search for the primary assembly
-                    var files = Directory.GetFiles(dumpsDir, "*.exe", SearchOption.AllDirectories);
-                    
-                    // Prioritize files named 'rawdump' (File Layout) over 'vdump' (Virtual Layout)
-                    // Raw dumps bypass Windows loader errors while keeping VMP Anti-Tamper happy.
-                    string found = files.FirstOrDefault(f => f.ToLower().Contains("rawdump")) ?? 
-                                   files.FirstOrDefault(f => f.ToLower().Contains("vdump")) ??
-                                   files.OrderByDescending(f => new FileInfo(f).Length).FirstOrDefault();
+                Console.WriteLine("\n[INFO] No argument given. Switching to GUI-Assist Mode.");
+                Console.WriteLine($"[INFO] Scanning for dumps in: {dumpsDir}");
 
-                    if (!string.IsNullOrEmpty(found))
-                    {
-                        currentTarget = found;
-                        success = true;
-                    }
+                if (!Directory.Exists(dumpsDir))
+                {
+                    Console.WriteLine($"[ERROR] Dump directory not found: {dumpsDir}");
+                    Console.WriteLine("[USAGE] Run MegaDumper GUI first, or provide the target file as an argument.");
+                    Console.ReadKey();
+                    return 1;
                 }
 
-                if (!process.HasExited) { try { process.Kill(); } catch { } }
+                var files = Directory.GetFiles(dumpsDir, "*.exe", SearchOption.AllDirectories);
+                string found = files.FirstOrDefault(f => f.ToLower().Contains("rawdump")) ??
+                               files.FirstOrDefault(f => f.ToLower().Contains("vdump")) ??
+                               files.OrderByDescending(f => new FileInfo(f).Length).FirstOrDefault();
+
+                if (!string.IsNullOrEmpty(found))
+                {
+                    currentTarget = found;
+                    success = true;
+                    Console.WriteLine($"[INFO] Found dump: {currentTarget}");
+                }
+                else
+                {
+                    Console.WriteLine("[ERROR] No .exe dumps found in C:\\Dumps\\dumps. Run MegaDumper GUI first.");
+                    Console.ReadKey();
+                    return 1;
+                }
             }
-            catch (Exception ex)
+            // -----------------------------------------------
+            // MODE 2: Argument given → Full CLI Pipeline
+            // Launch target, dump to C:\Dumps, run de4dotEx.
+            // -----------------------------------------------
+            else
             {
-                Console.WriteLine($"[ERROR] Dumping failed: {ex.Message}");
+                string inputFilePath = Path.GetFullPath(args[0]);
+                if (!File.Exists(inputFilePath))
+                {
+                    Console.WriteLine($"[ERROR] File not found: {inputFilePath}");
+                    return 1;
+                }
+
+                string outputDir = Path.GetDirectoryName(inputFilePath);
+                string dumpRoot = @"C:\Dumps";
+
+                Console.WriteLine("\n[INFO] Starting Dynamic Analysis Mode...");
+
+                ProcessStartInfo startInfo = new ProcessStartInfo(inputFilePath);
+                startInfo.WorkingDirectory = outputDir;
+
+                Process process = Process.Start(startInfo);
+                Console.WriteLine($"[INFO] Process started (PID: {process.Id}). Waiting 5 seconds for initialization...");
+                await Task.Delay(5000);
+
+                try
+                {
+                    Mega_Dumper.MainForm megaDumper = new Mega_Dumper.MainForm();
+                    string dumpResult = await megaDumper.DumpProcessByIdCli((uint)process.Id, dumpRoot);
+                    Console.WriteLine($"[INFO] MegaDumper finished: {dumpResult}");
+
+                    if (Directory.Exists(dumpsDir))
+                    {
+                        var files = Directory.GetFiles(dumpsDir, "*.exe", SearchOption.AllDirectories);
+
+                        string found = files.FirstOrDefault(f => f.ToLower().Contains("rawdump")) ??
+                                       files.FirstOrDefault(f => f.ToLower().Contains("vdump")) ??
+                                       files.OrderByDescending(f => new FileInfo(f).Length).FirstOrDefault();
+
+                        if (!string.IsNullOrEmpty(found))
+                        {
+                            currentTarget = found;
+                            success = true;
+                        }
+                    }
+
+                    if (!process.HasExited) { try { process.Kill(); } catch { } }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR] Dumping failed: {ex.Message}");
+                }
             }
 
             if (success && File.Exists(currentTarget))
             {
                 // Step 2: Restore Original Filename (CRITICAL for VMP)
-                string originalName = Path.GetFileName(inputFilePath);
-                string renamedFile = Path.Combine(Path.GetDirectoryName(currentTarget), originalName);
-                try 
+                string originalName = Path.GetFileName(args.Length > 0 ? Path.GetFullPath(args[0]) : currentTarget);
+                string renamedTarget = Path.Combine(Path.GetDirectoryName(currentTarget), originalName);
+
+                if (!currentTarget.Equals(renamedTarget, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (File.Exists(renamedFile)) File.Delete(renamedFile);
-                    File.Move(currentTarget, renamedFile);
-                    currentTarget = renamedFile;
-                    Console.WriteLine($"[SUCCESS] Renamed dump to: {originalName}");
-                } catch { }
+                    if (File.Exists(renamedTarget)) File.Delete(renamedTarget);
+                    File.Copy(currentTarget, renamedTarget);
+                    Console.WriteLine($"[INFO] Copied dump as: {renamedTarget}");
+                    currentTarget = renamedTarget;
+                }
 
                 // VMP ANTI-TAMPER FIX: Do NOT normalize the assembly with dnlib here!
                 // VMP's .cctor hashes the PE headers. Any structural changes (even fixing alignments)
@@ -104,9 +138,16 @@ namespace HydraVMPDestroyer.App
 
                 // Step 3: Deobfuscate
                 Console.WriteLine("\n[INFO] Running de4dotEx...");
-                
-                string de4dotDllPath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\..\..\..\..\de4dotEx\Debug\net8.0\de4dot.cui.dll"));
-                
+
+                // de4dot.cui.dll is copied to the output directory during build
+                string de4dotDllPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "de4dot.cui.dll");
+
+                if (!File.Exists(de4dotDllPath))
+                {
+                    // Fallback to the explicit project build path
+                    de4dotDllPath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\..\..\..\..\de4dotEx\Debug\net8.0\de4dot.cui.dll"));
+                }
+
                 if (!File.Exists(de4dotDllPath))
                 {
                     Console.WriteLine($"[ERROR] Could not find de4dotEx at: {de4dotDllPath}");
@@ -114,7 +155,7 @@ namespace HydraVMPDestroyer.App
                 else
                 {
                     string de4dotArgs = $"\"{de4dotDllPath}\" --un-name true --strtyp emulate --strtok true --delegate-to-method true --proxy-calls true --file \"{currentTarget}\"";
-                    
+
                     try
                     {
                         var de4dotProc = Process.Start(new ProcessStartInfo
@@ -123,12 +164,27 @@ namespace HydraVMPDestroyer.App
                             Arguments = de4dotArgs,
                             UseShellExecute = false,
                             RedirectStandardOutput = true,
+                            RedirectStandardError = true,
                             CreateNoWindow = true
                         });
-                        Console.WriteLine(de4dotProc.StandardOutput.ReadToEnd());
+
+                        string output = de4dotProc.StandardOutput.ReadToEnd();
+                        string error = de4dotProc.StandardError.ReadToEnd();
+
                         de4dotProc.WaitForExit();
+
+                        if (!string.IsNullOrWhiteSpace(output))
+                            Console.WriteLine(output);
+
+                        if (!string.IsNullOrWhiteSpace(error))
+                            Console.WriteLine($"[DE4DOT ERROR]:\n{error}");
+
+                        if (de4dotProc.ExitCode != 0)
+                        {
+                            Console.WriteLine($"[ERROR] de4dotEx crashed with Exit Code: {de4dotProc.ExitCode}");
+                        }
                     }
-                    catch (Exception ex) { Console.WriteLine($"[ERROR] de4dotEx error: {ex.Message}"); }
+                    catch (Exception ex) { Console.WriteLine($"[ERROR] de4dotEx execution error: {ex.Message}"); }
                 }
             }
             else
@@ -153,7 +209,6 @@ namespace HydraVMPDestroyer.App
                     options.MetadataOptions.Flags |= MetadataFlags.KeepOldMaxStack;
                     options.Logger = DummyLogger.NoThrowInstance;
                     
-                    // VMP Fix: We don't touch EntryPoint here, just let dnlib fix the RVAs/Layout
                     string temp = filePath + ".tmp";
                     module.Write(temp, options);
                     File.Delete(filePath);

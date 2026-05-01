@@ -1581,7 +1581,7 @@ namespace Mega_Dumper
 
             int selectedIndex = lvprocesslist.SelectedIndices[0];
             uint processId = Convert.ToUInt32(lvprocesslist.Items[selectedIndex].SubItems[1].Text);
-            string dirname = lvprocesslist.Items[selectedIndex].SubItems[4].Text;
+            string dirname = @"C:\Dumps"; // Always dump to C:\Dumps
             bool dumpNative = dumpNativeToolStripMenuItem.Checked;
             bool restoreFilename = !dontRestoreFilenameToolStripMenuItem.Checked;
 
@@ -1902,7 +1902,7 @@ namespace Mega_Dumper
         {
             if (string.IsNullOrEmpty(dpmdirs.root)) dpmdirs.root = Path.Combine("C:\\", "Dumps");
             
-            dpmdirs.dumps = Path.Combine(dpmdirs.root, "dumps");
+            dpmdirs.dumps = dpmdirs.root;
             dpmdirs.nativedirname = Path.Combine(dpmdirs.dumps, "Native");
             dpmdirs.sysdirname = Path.Combine(dpmdirs.dumps, "System");
             dpmdirs.unknowndirname = Path.Combine(dpmdirs.dumps, "UnknownName");
@@ -2241,7 +2241,7 @@ namespace Mega_Dumper
                                                 if (ReadProcessMemoryW(hProcess, netMetaAddr, infokeep, (UIntPtr)8, out BytesRead))
                                                     NetMetadata = BitConverter.ToInt64(infokeep, 0);
 
-                                                if (dumpNative || NetMetadata != 0)
+                                                if (dumpNative || NetMetadata != 0 || isProcessDynamicallyManaged)
                                                 {
                                                     // For VMP, we prefer a raw header capture without heavy fixups at the dump stage.
                                                     int peHeaderSize = Math.Max(pagesizeInt, e_lfanew + 0x400);
@@ -2256,7 +2256,7 @@ namespace Mega_Dumper
 
                                                     if (nrofsection > 0 && nrofsection < 100) // Sanity check for number of sections
                                                     {
-                                                        string dumpdir = "";
+                                                        string dumpdir = ddirs.dumps; // ALWAYS dump to the main directory
 
                                                         // Read section alignment values directly from memory to ensure accuracy
                                                         byte[] alignmentBytes = new byte[8];
@@ -2351,13 +2351,12 @@ namespace Mega_Dumper
                                                                 // Copy headers first
                                                                 int headersSize = BitConverter.ToInt32(PeHeader, e_lfanew + 0x54);
                                                                 if (headersSize > PeHeader.Length) headersSize = PeHeader.Length;
-                                                                Array.Copy(PeHeader, rawdump, headersSize);
+                                                                Array.Copy(PeHeader, rawdump, Math.Min(headersSize, rawdump.Length));
 
                                                                 // Copy each section from its VirtualAddress to its PointerToRawData
                                                                 for (int s = 0; s < nrofsection; s++)
                                                                 {
                                                                     int vAddress = sections[s].virtual_address;
-                                                                    int vSize = sections[s].virtual_size;
                                                                     int rAddress = sections[s].pointer_to_raw_data;
                                                                     int rSize = sections[s].size_of_raw_data;
 
@@ -2405,12 +2404,12 @@ namespace Mega_Dumper
                                                         }
 
                                                         // --- VMP ANTI-DUMP FIX: Calculate True SizeOfImage ---
-                                                        // VMP spoofs SizeOfImage to be artificially small in memory.
+                                                        // VMP spoofs SizeOfImage to be artificially small or huge in memory.
                                                         // We must find the highest section extent to allocate the correct buffer.
-                                                        int trueSizeOfImage = sizeofimage;
+                                                        long trueSizeOfImage = sizeofimage;
                                                         for (int l = 0; l < nrofsection; l++)
                                                         {
-                                                            int sectionExtent = sections[l].virtual_address + sections[l].virtual_size;
+                                                            long sectionExtent = (long)sections[l].virtual_address + sections[l].virtual_size;
                                                             if (sectionExtent > trueSizeOfImage)
                                                                 trueSizeOfImage = sectionExtent;
                                                         }
@@ -2418,15 +2417,28 @@ namespace Mega_Dumper
                                                         // Align to page size to be safe
                                                         trueSizeOfImage = (trueSizeOfImage + 0xFFF) & ~0xFFF;
                                                         
+                                                        // Sane limit: Don't allocate more than 500MB for a single PE image
+                                                        if (trueSizeOfImage > 500 * 1024 * 1024)
+                                                            trueSizeOfImage = 500 * 1024 * 1024;
+                                                        
                                                         if (trueSizeOfImage > sizeofimage)
                                                         {
                                                             Console.WriteLine($"[WARNING] Detected spoofed SizeOfImage! Fixing: {sizeofimage:X} -> {trueSizeOfImage:X}");
-                                                            sizeofimage = trueSizeOfImage;
+                                                            sizeofimage = (int)trueSizeOfImage;
                                                         }
 
                                                         // --- VDUMP BLOCK ---
-                                                        byte[] virtualdump = new byte[sizeofimage];
-                                                        Array.Copy(PeHeader, virtualdump, Math.Min(PeHeader.Length, sizeofimage));
+                                                        byte[] virtualdump = null;
+                                                        try 
+                                                        {
+                                                            virtualdump = new byte[sizeofimage];
+                                                            Array.Copy(PeHeader, virtualdump, Math.Min(PeHeader.Length, sizeofimage));
+                                                        }
+                                                        catch (OutOfMemoryException)
+                                                        {
+                                                            Console.WriteLine($"[ERROR] OutOfMemoryException when trying to allocate {sizeofimage} bytes for Virtual Dump. Skipping.");
+                                                            continue;
+                                                        }
 
                                                         int rightrawsize = 0;
                                                         for (int l = 0; l < nrofsection; l++)
