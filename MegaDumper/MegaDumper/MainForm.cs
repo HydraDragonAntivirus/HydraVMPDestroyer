@@ -2229,7 +2229,7 @@ namespace Mega_Dumper
                                                 // Determine architecture and correct Metadata offset
                                                 ushort magic = 0;
                                                 // Read Magic bytes (PE Signature + 24 bytes = offset 24 in NT header)
-                                                if (ReadProcessMemoryW(hProcess, (j + (ulong)k + (ulong)PEOffset + 24UL), infokeep, (UIntPtr)2, out BytesRead))
+                                                if (ReadProcessMemoryW(hProcess, (j + (ulong)k + (ulong)e_lfanew + 24UL), infokeep, (UIntPtr)2, out BytesRead))
                                                     magic = BitConverter.ToUInt16(infokeep, 0);
 
                                                 bool isPE64 = (magic == 0x20B);
@@ -2237,19 +2237,14 @@ namespace Mega_Dumper
 
                                                 long NetMetadata = 0;
                                                 // read 8 bytes at CLR metadata pointer
-                                                ulong netMetaAddr = j + (ulong)k + (ulong)PEOffset + (ulong)metadataOffset;
+                                                ulong netMetaAddr = j + (ulong)k + (ulong)e_lfanew + (ulong)metadataOffset;
                                                 if (ReadProcessMemoryW(hProcess, netMetaAddr, infokeep, (UIntPtr)8, out BytesRead))
                                                     NetMetadata = BitConverter.ToInt64(infokeep, 0);
 
-                                                if (NetMetadata == 0 && isNetAssembly)
-                                                {
-                                                    NetMetadata = 1;
-                                                }
-
                                                 if (dumpNative || NetMetadata != 0)
                                                 {
-                                                    // Read entire PE header from memory in one operation to ensure consistency
-                                                    int peHeaderSize = Math.Max(pagesizeInt, PEOffset + 0x400); // Ensure we read enough data
+                                                    // For VMP, we prefer a raw header capture without heavy fixups at the dump stage.
+                                                    int peHeaderSize = Math.Max(pagesizeInt, e_lfanew + 0x400);
                                                     byte[] PeHeader = new byte[peHeaderSize];
                                                     if (!ReadProcessMemoryW(hProcess, j + (ulong)k, PeHeader, (UIntPtr)peHeaderSize, out BytesRead))
                                                         continue;
@@ -2311,11 +2306,11 @@ namespace Mega_Dumper
                                                         string filename = "";
 
                                                         // calculate right size of image
-                                                        int sizeofimage = BitConverter.ToInt32(PeHeader, PEOffset + 0x050);
+                                                        int sizeofimage = BitConverter.ToInt32(PeHeader, e_lfanew + 0x050);
 
                                                         // CHANGE: Correctly initialize calculatedimagesize from PE Header's SizeOfHeaders field.
                                                         // Offset 60 from OptionalHeader start (24) = 84 (0x54)
-                                                        int sizeOfHeaders = BitConverter.ToInt32(PeHeader, PEOffset + 0x54);
+                                                        int sizeOfHeaders = BitConverter.ToInt32(PeHeader, e_lfanew + 0x54);
                                                         int calculatedimagesize = sizeOfHeaders;
 
                                                         int rawsize, rawAddress, virtualsize, virtualAddress = 0;
@@ -2579,19 +2574,18 @@ namespace Mega_Dumper
 
                                     // DYNAMIC RUNTIME OVERRIDE
                                     if (isProcessDynamicallyManaged && !isDotNetFile) isDotNetFile = true;
-                                    else if (!isProcessDynamicallyManaged && isDotNetFile)
-                                    {
-                                        // Keep as .NET if BSJB found, even if dynamic check failed
-                                    }
 
                                     string finalDir = targetDir;
+                                    bool isMicrosoft = false;
                                     try 
                                     {
                                         FileVersionInfo info = FileVersionInfo.GetVersionInfo(fi.FullName);
+                                        
                                         // If Microsoft -> System Folder
                                         if (info.CompanyName?.IndexOf("microsoft corporation", StringComparison.OrdinalIgnoreCase) >= 0)
                                         {
                                             finalDir = ddirs.sysdirname;
+                                            isMicrosoft = true;
                                         }
                                         // If Not .NET and Not System -> Native Folder
                                         else if (!isDotNetFile)
@@ -2612,21 +2606,25 @@ namespace Mega_Dumper
                                             if (fi.FullName.ToLower() != newFilename.ToLower())
                                             {
                                                 File.Move(fi.FullName, newFilename);
-                                                Console.WriteLine($"[DEBUG] Moved to {finalDir}: {fi.Name} -> {Path.GetFileName(newFilename)}");
+                                                Console.WriteLine($"[DEBUG] Moved to {Path.GetFileName(finalDir)}: {fi.Name} -> {Path.GetFileName(newFilename)}");
                                             }
                                             continue;
+                                        }
+                                        else if (!isMicrosoft)
+                                        {
+                                            // No original name and not Microsoft -> Move to Unknown
+                                            finalDir = ddirs.unknowndirname;
                                         }
                                     }
                                     catch { }
 
                                     // Fallback move
-                                    string fallbackDir = isDotNetFile ? targetDir : ddirs.nativedirname;
-                                    string fallbackPath = Path.Combine(fallbackDir, fi.Name);
+                                    string fallbackPath = Path.Combine(finalDir, fi.Name);
                                     if (fi.FullName.ToLower() != fallbackPath.ToLower())
                                     {
                                         if (File.Exists(fallbackPath)) File.Delete(fallbackPath);
                                         File.Move(fi.FullName, fallbackPath);
-                                        Console.WriteLine($"[DEBUG] Moved to {(isDotNetFile ? "Managed" : "Native")}: {fi.Name}");
+                                        Console.WriteLine($"[DEBUG] Moved to {Path.GetFileName(finalDir)}: {fi.Name}");
                                     }
                                 }
                                 catch (Exception ex) 

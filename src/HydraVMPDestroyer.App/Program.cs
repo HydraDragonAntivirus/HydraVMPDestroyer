@@ -62,11 +62,31 @@ namespace HydraVMPDestroyer.App
                     string dumpsDir = Path.Combine(outputDir, "dumps");
                     if (Directory.Exists(dumpsDir))
                     {
-                        // Search recursively to find files in Managed/Native/Unknown subfolders
-                        var files = Directory.GetFiles(dumpsDir, "*.exe", SearchOption.AllDirectories);
-                        if (files.Length > 0)
+                        // Find the most likely dump target
+                        string foundTarget = "";
+                        var files = Directory.GetFiles(dumpsDir, "*.*", SearchOption.AllDirectories);
+                        
+                        // Prioritize vdump_*.exe files (virtual dumps) in any directory
+                        foreach (var file in files) {
+                            if (file.ToLower().Contains("vdump") && file.ToLower().EndsWith(".exe")) {
+                                foundTarget = file;
+                                break;
+                            }
+                        }
+
+                        // Fallback to any .exe in the dumps folder if no vdump found
+                        if (string.IsNullOrEmpty(foundTarget)) {
+                            foreach (var file in files) {
+                                if (file.ToLower().EndsWith(".exe")) {
+                                    foundTarget = file;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (!string.IsNullOrEmpty(foundTarget))
                         {
-                            currentTarget = files.OrderByDescending(f => new FileInfo(f).Length).First();
+                            currentTarget = foundTarget;
                             Console.WriteLine($"[SUCCESS] Memory dump obtained: {currentTarget}");
                             success = true;
                         }
@@ -119,8 +139,9 @@ namespace HydraVMPDestroyer.App
                 Console.WriteLine("[ERROR] Failed to obtain a valid memory dump.");
             }
 
-            Console.WriteLine("\nPress any key to exit...");
+            Console.WriteLine("\n[SUCCESS] Pipeline finished. Press any key to exit...");
             Console.ReadKey();
+            Environment.Exit(0);
             return 0;
         }
 
