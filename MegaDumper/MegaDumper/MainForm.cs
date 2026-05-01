@@ -2347,8 +2347,33 @@ namespace Mega_Dumper
                                                             try
                                                             {
                                                                 byte[] rawdump = new byte[totalrawsize];
-                                                                // read rawdump from remote at base j+k
-                                                                isok = ReadProcessMemoryW(hProcess, j + (ulong)k, rawdump, (UIntPtr)rawdump.Length, out BytesRead);
+                                                                // --- PROPER RAW DUMP RECONSTRUCTION ---
+                                                                // Copy headers first
+                                                                int headersSize = BitConverter.ToInt32(PeHeader, e_lfanew + 0x54);
+                                                                if (headersSize > PeHeader.Length) headersSize = PeHeader.Length;
+                                                                Array.Copy(PeHeader, rawdump, headersSize);
+
+                                                                // Copy each section from its VirtualAddress to its PointerToRawData
+                                                                for (int s = 0; s < nrofsection; s++)
+                                                                {
+                                                                    int vAddress = sections[s].virtual_address;
+                                                                    int vSize = sections[s].virtual_size;
+                                                                    int rAddress = sections[s].pointer_to_raw_data;
+                                                                    int rSize = sections[s].size_of_raw_data;
+
+                                                                    if (rSize == 0 || rAddress == 0) continue;
+
+                                                                    byte[] sectionData = new byte[rSize];
+                                                                    ReadProcessMemoryW(hProcess, j + (ulong)k + (ulong)vAddress, sectionData, (UIntPtr)rSize, out BytesRead);
+                                                                    
+                                                                    try
+                                                                    {
+                                                                        Array.Copy(sectionData, 0, rawdump, rAddress, rSize);
+                                                                    }
+                                                                    catch { }
+                                                                }
+                                                                isok = true;
+                                                                
                                                                 if (isok)
                                                                 {
                                                                     dumpdir = ddirs.dumps;

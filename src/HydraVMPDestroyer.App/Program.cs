@@ -64,8 +64,10 @@ namespace HydraVMPDestroyer.App
                     // Recursive search for the primary assembly
                     var files = Directory.GetFiles(dumpsDir, "*.exe", SearchOption.AllDirectories);
                     
-                    // Prioritize files named 'vdump' or the largest exe
-                    string found = files.FirstOrDefault(f => f.ToLower().Contains("vdump")) ?? 
+                    // Prioritize files named 'rawdump' (File Layout) over 'vdump' (Virtual Layout)
+                    // Raw dumps bypass Windows loader errors while keeping VMP Anti-Tamper happy.
+                    string found = files.FirstOrDefault(f => f.ToLower().Contains("rawdump")) ?? 
+                                   files.FirstOrDefault(f => f.ToLower().Contains("vdump")) ??
                                    files.OrderByDescending(f => new FileInfo(f).Length).FirstOrDefault();
 
                     if (!string.IsNullOrEmpty(found))
