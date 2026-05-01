@@ -2505,14 +2505,13 @@ namespace Mega_Dumper
                 if (restoreFilename)
                 {
                     Action<string, string> renameFiles = (string sourceDir, string targetDir) => {
-                                                        if (Directory.Exists(sourceDir))
+                        if (Directory.Exists(sourceDir))
                         {
                             DirectoryInfo di = new DirectoryInfo(sourceDir);
                             foreach (FileInfo fi in di.GetFiles())
                             {
                                 try
                                 {
-                                    Console.WriteLine($"[DEBUG] Sorting: {fi.Name} (Size: {fi.Length} bytes)");
                                     bool isDotNetFile = false;
                                     try
                                     {
@@ -2529,25 +2528,35 @@ namespace Mega_Dumper
                                             int opt = pe + 4 + 20;
                                             bool is64 = BitConverter.ToUInt16(header, opt) == 0x20B;
                                             int dataDir = opt + (is64 ? 112 : 96);
-                                            if (dataDir + (14 * 8) + 4 < 0x400) // Safety bound for CLR header directory
+                                            
+                                            // Check 1: CLR Directory Index
+                                            if (dataDir + (14 * 8) + 4 < 0x400)
                                             {
                                                 if (BitConverter.ToUInt32(header, dataDir + (14 * 8)) > 0) isDotNetFile = true;
                                             }
+
+                                            // Check 2: BSJB Heuristic scan
+                                            if (!isDotNetFile)
+                                            {
+                                                for (int i = 0; i < 0x3FC; i++)
+                                                {
+                                                    if (header[i] == 0x42 && header[i+1] == 0x53 && header[i+2] == 0x4A && header[i+3] == 0x42)
+                                                    {
+                                                        isDotNetFile = true;
+                                                        Console.WriteLine($"[DEBUG] Heuristic .NET detection: Found BSJB at 0x{i:X} in {fi.Name}");
+                                                        break;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
-                                    catch { }
+                                    catch (Exception ex) { Console.WriteLine($"[DEBUG] PE check failed for {fi.Name}: {ex.Message}"); }
 
                                     // DYNAMIC RUNTIME OVERRIDE
-                                    // Bypasses both Enigma/Themida (strips index 14) and FakeNet/Python loaders (spoofs index 14)
-                                    if (isProcessDynamicallyManaged && !isDotNetFile) 
-                                    {
-                                        // It's a genuine decrypted Enigma .NET payload!
-                                        isDotNetFile = true;
-                                    }
+                                    if (isProcessDynamicallyManaged && !isDotNetFile) isDotNetFile = true;
                                     else if (!isProcessDynamicallyManaged && isDotNetFile)
                                     {
-                                        // It's a FakeNet python decoy natively fooling static scanners!
-                                        isDotNetFile = false;
+                                        // Keep as .NET if BSJB found, even if dynamic check failed
                                     }
 
                                     string finalDir = targetDir;
@@ -2583,7 +2592,7 @@ namespace Mega_Dumper
                                             continue;
                                         }
                                     }
-                                    catch (Exception ex) { Console.WriteLine($"[DEBUG] Metadata check failed for {fi.Name}: {ex.Message}"); }
+                                    catch { }
 
                                     // Fallback move
                                     string fallbackDir = isDotNetFile ? targetDir : ddirs.nativedirname;
@@ -2592,7 +2601,7 @@ namespace Mega_Dumper
                                     {
                                         if (File.Exists(fallbackPath)) File.Delete(fallbackPath);
                                         File.Move(fi.FullName, fallbackPath);
-                                        Console.WriteLine($"[DEBUG] Moved to {fallbackDir}: {fi.Name}");
+                                        Console.WriteLine($"[DEBUG] Moved to {(isDotNetFile ? "Managed" : "Native")}: {fi.Name}");
                                     }
                                 }
                                 catch (Exception ex) 

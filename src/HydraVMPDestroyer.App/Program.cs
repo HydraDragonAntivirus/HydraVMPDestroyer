@@ -82,6 +82,16 @@ namespace HydraVMPDestroyer.App
 
             if (success && File.Exists(currentTarget))
             {
+                // Step 1.5: Fix Memory Dump Alignment
+                try
+                {
+                    FixMemoryDumpAlignment(currentTarget);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[WARNING] Failed to fix dump alignment: {ex.Message}");
+                }
+
                 // Step 2: de4dotEx
                 Console.WriteLine();
                 Console.WriteLine($"[INFO] Running de4dotEx on memory dump: {currentTarget}");
@@ -112,6 +122,57 @@ namespace HydraVMPDestroyer.App
             Console.WriteLine("\nPress any key to exit...");
             Console.ReadKey();
             return 0;
+        }
+
+        private static void FixMemoryDumpAlignment(string filePath)
+        {
+            byte[] data = File.ReadAllBytes(filePath);
+            if (data.Length < 0x200) return;
+
+            int peHeaderOffset = BitConverter.ToInt32(data, 0x3C);
+            if (peHeaderOffset + 0x100 > data.Length) return;
+
+            // Optional Header check
+            int optionalHeaderOffset = peHeaderOffset + 4 + 20;
+            bool is64Bit = BitConverter.ToUInt16(data, optionalHeaderOffset) == 0x20B;
+
+            // SectionAlignment is at OptionalHeader + 32 (32-bit) or 32 (64-bit)
+            // Wait, offsets:
+            // 32-bit: SectionAlignment (32), FileAlignment (36)
+            // 64-bit: SectionAlignment (32), FileAlignment (36)
+            // Yes, they are at the same offset in both.
+            
+            int sectionAlignment = BitConverter.ToInt32(data, optionalHeaderOffset + 32);
+            int fileAlignment = BitConverter.ToInt32(data, optionalHeaderOffset + 36);
+
+            if (sectionAlignment > fileAlignment)
+            {
+                Console.WriteLine($"[INFO] Fixing memory dump alignment (Section: 0x{sectionAlignment:X}, File: 0x{fileAlignment:X})...");
+                
+                // Set FileAlignment = SectionAlignment
+                byte[] saBytes = BitConverter.GetBytes(sectionAlignment);
+                Buffer.BlockCopy(saBytes, 0, data, optionalHeaderOffset + 36, 4);
+
+                // Fix Sections
+                int numberOfSections = BitConverter.ToUInt16(data, peHeaderOffset + 4 + 2);
+                int sizeOfOptionalHeader = BitConverter.ToUInt16(data, peHeaderOffset + 4 + 16);
+                int sectionTableOffset = peHeaderOffset + 4 + 20 + sizeOfOptionalHeader;
+
+                for (int i = 0; i < numberOfSections; i++)
+                {
+                    int sectionOffset = sectionTableOffset + (i * 40);
+                    // PointerToRawData (20) = VirtualAddress (12)
+                    // SizeOfRawData (16) = VirtualSize (8)
+                    int virtualAddress = BitConverter.ToInt32(data, sectionOffset + 12);
+                    int virtualSize = BitConverter.ToInt32(data, sectionOffset + 8);
+
+                    Buffer.BlockCopy(BitConverter.GetBytes(virtualAddress), 0, data, sectionOffset + 20, 4);
+                    Buffer.BlockCopy(BitConverter.GetBytes(virtualSize), 0, data, sectionOffset + 16, 4);
+                }
+
+                File.WriteAllBytes(filePath, data);
+                Console.WriteLine("[SUCCESS] Dump alignment fixed.");
+            }
         }
     }
 }
