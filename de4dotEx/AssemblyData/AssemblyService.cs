@@ -76,7 +76,13 @@ namespace AssemblyData {
 				assembly = assemblyResolver.Load(filename);
 			}
 			catch (BadImageFormatException ex) {
-				throw new ApplicationException($"Could not load assembly {filename}. Maybe it's 32-bit or 64-bit only?", ex);
+				Console.WriteLine($"[ERROR] BadImageFormatException details: {ex}");
+				if (ex.InnerException != null) Console.WriteLine($"[ERROR] Inner: {ex.InnerException}");
+				throw new ApplicationException($"Could not load assembly {filename}. Maybe it's 32-bit or 64-bit only? Error: {ex.Message}", ex);
+			}
+			catch (Exception ex) {
+				Console.WriteLine($"[ERROR] General Load Error: {ex}");
+				throw;
 			}
 		}
 	}

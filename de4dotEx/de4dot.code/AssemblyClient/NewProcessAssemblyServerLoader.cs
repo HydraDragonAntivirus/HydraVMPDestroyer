@@ -17,12 +17,12 @@
     along with de4dot.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#if NETFRAMEWORK
 using System;
 using System.Diagnostics;
 using AssemblyData;
 
 namespace de4dot.code.AssemblyClient {
+#if NETFRAMEWORK
 	// Starts the server in a new process
 	public class NewProcessAssemblyServerLoader : IpcAssemblyServerLoader {
 		Process process;
@@ -48,6 +48,13 @@ namespace de4dot.code.AssemblyClient {
 				UseShellExecute = false,
 				WorkingDirectory = Utils.GetOurBaseDir(),
 			};
+			
+			// If filename is the same as current process, we might need to use 'dotnet' to run it if it's a DLL
+			if (filename.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) {
+				psi.FileName = "dotnet";
+				psi.Arguments = $"{Utils.ShellEscape(filename)} {psi.Arguments}";
+			}
+
 			process = Process.Start(psi);
 			if (process == null)
 				throw new ApplicationException("Could not start process");
@@ -67,5 +74,10 @@ namespace de4dot.code.AssemblyClient {
 			}
 		}
 	}
-}
+#else
+	public class NewProcessAssemblyServerLoader : IpcAssemblyServerLoader {
+		public NewProcessAssemblyServerLoader(AssemblyServiceType serviceType) : base(serviceType) { }
+		public NewProcessAssemblyServerLoader(AssemblyServiceType serviceType, ServerClrVersion version) : base(serviceType, version) { }
+	}
 #endif
+}

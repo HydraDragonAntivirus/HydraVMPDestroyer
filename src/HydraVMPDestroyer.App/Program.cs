@@ -17,6 +17,7 @@ namespace HydraVMPDestroyer.App
             Console.WriteLine("        HydraVMPDestroyer - Unified Tool");
             Console.WriteLine("   VMP Unpacker + MegaDumper + de4dotEx");
             Console.WriteLine("=================================================");
+            Console.WriteLine($"[INFO] Runtime Architecture: {(IntPtr.Size == 4 ? "x86" : "x64")}");
             Console.WriteLine("[!] Note: Specifically for .NET VMProtect executables.");
             Console.WriteLine();
 
@@ -35,118 +36,75 @@ namespace HydraVMPDestroyer.App
                 return 1;
             }
 
-            string workDir = Path.GetDirectoryName(filePath) ?? Environment.CurrentDirectory;
-            string fileName = Path.GetFileNameWithoutExtension(filePath);
-
+            string workDir = Path.GetDirectoryName(filePath) ?? "";
             string currentTarget = filePath;
             bool success = false;
 
-            if (!forceDump)
+            Console.WriteLine("[INFO] Direct Dynamic Analysis Mode: Using MegaDumper...");
+            try
             {
-                // Step 1: Static Unpack
-                Console.WriteLine("[INFO] Step 1: Attempting static unpack (VMP Unpacker)...");
-                try
+                using (var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(filePath) { UseShellExecute = true }))
                 {
-                    byte[] unpackedData = VMPUnpacker.Unpack(filePath);
-                    if (unpackedData != null)
-                    {
-                        string staticUnpackedFile = Path.Combine(workDir, fileName + "_unpacked.exe");
-                        File.WriteAllBytes(staticUnpackedFile, unpackedData);
-                        Console.WriteLine($"[SUCCESS] Static unpack successful: {staticUnpackedFile}");
-                        currentTarget = staticUnpackedFile;
-                        success = true;
-                    }
-                    else
-                    {
-                        Console.WriteLine("[WARNING] Static unpacker could not find VMP patterns.");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[ERROR] Static unpacker failed: {ex.Message}");
-                }
-            }
+                    if (process == null) throw new Exception("Failed to start process.");
 
-            if (!success || forceDump)
-            {
-                // Step 2: Fallback to MegaDumper
-                Console.WriteLine(forceDump ? "[INFO] Forced dump mode enabled." : "[INFO] Falling back to MegaDumper...");
-                Console.WriteLine("[IMPORTANT] This will START the process to dump it from memory.");
-                Console.Write("[?] Continue? (y/n): ");
-                var key = Console.ReadKey();
-                Console.WriteLine();
-                if (key.KeyChar == 'y' || key.KeyChar == 'Y')
-                {
-                    try
+                    Console.WriteLine($"[INFO] Process started (PID: {process.Id}). Waiting 5 seconds for initialization...");
+                    await Task.Delay(5000);
+
+                    var megaDumper = new Mega_Dumper.MainForm();
+                    megaDumper.EnableDebuggerPrivileges();
+
+                    string outputDir = Path.Combine(workDir, "Dumps_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+                    Console.WriteLine($"[INFO] Dumping process to: {outputDir}");
+                    
+                    string dumpResult = await megaDumper.DumpProcessByIdCli((uint)process.Id, outputDir);
+                    
+                    string dumpsDir = Path.Combine(outputDir, "dumps");
+                    if (Directory.Exists(dumpsDir))
                     {
-                        using (var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(filePath) { UseShellExecute = true }))
+                        var files = Directory.GetFiles(dumpsDir, "*.exe");
+                        if (files.Length > 0)
                         {
-                            if (process == null) throw new Exception("Failed to start process.");
-
-                            Console.WriteLine($"[INFO] Process started (PID: {process.Id}). Waiting 4 seconds for initialization...");
-                            await Task.Delay(4000);
-
-                            var megaDumper = new Mega_Dumper.MainForm();
-                            megaDumper.EnableDebuggerPrivileges();
-
-                            string outputDir = Path.Combine(workDir, "Dumps_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
-                            string dumpResult = await megaDumper.DumpProcessByIdCli((uint)process.Id, outputDir);
-                            Console.WriteLine($"[INFO] MegaDumper result: {dumpResult}");
-
-                            string dumpsDir = Path.Combine(outputDir, "dumps");
-                            if (Directory.Exists(dumpsDir))
-                            {
-                                var files = Directory.GetFiles(dumpsDir, "*.exe");
-                                if (files.Length > 0)
-                                {
-                                    currentTarget = files.OrderByDescending(f => new FileInfo(f).Length).First();
-                                    Console.WriteLine($"[SUCCESS] Memory dump obtained: {currentTarget}");
-                                    success = true;
-                                }
-                            }
-
-                            if (!process.HasExited)
-                            {
-                                try { process.Kill(); } catch { }
-                            }
+                            currentTarget = files.OrderByDescending(f => new FileInfo(f).Length).First();
+                            Console.WriteLine($"[SUCCESS] Memory dump obtained: {currentTarget}");
+                            success = true;
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[ERROR] MegaDumper fallback failed: {ex.Message}");
-                    }
+
+                    if (!process.HasExited) { try { process.Kill(); } catch { } }
                 }
-                else
-                {
-                    Console.WriteLine("[INFO] User declined memory dump.");
-                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] MegaDumper failed: {ex.Message}");
             }
 
             if (success && File.Exists(currentTarget))
             {
-                // Step 3: de4dotEx
+                // Step 2: de4dotEx
                 Console.WriteLine();
-                Console.WriteLine($"[INFO] Step 3: Running de4dotEx on: {currentTarget}");
-                try
+                Console.WriteLine($"[INFO] Running de4dotEx on memory dump: {currentTarget}");
+                
+                string[] de4dotArgs = new string[] { 
+                    currentTarget, 
+                    "--un-name", "true", 
+                    "--strtyp", "delegate", 
+                    "--strtok", "static",
+                    "--strtyp", "emulate"
+                };
+
+                int exitCode = de4dot.cui.Program.Main(de4dotArgs);
+                if (exitCode == 0)
                 {
-                    // Adding --strtyp delegate and other aggressive flags might help with the object_0 issue
-                    string[] de4dotArgs = new string[] { 
-                        currentTarget, 
-                        "--un-name", "true", 
-                        "--strtyp", "delegate", 
-                        "--strtok", "static" 
-                    };
-                    de4dot.cui.Program.Main(de4dotArgs);
-                    Console.WriteLine("[SUCCESS] Orchestration complete.");
+                    Console.WriteLine("[SUCCESS] Deobfuscation complete.");
                 }
-                catch (Exception ex)
+                else
                 {
-                    Console.WriteLine($"[ERROR] de4dotEx encountered an error: {ex.Message}");
+                    Console.WriteLine("[ERROR] de4dotEx failed to process the memory dump.");
                 }
             }
             else
             {
-                Console.WriteLine("[ERROR] Pipeline failed. No valid assembly was produced.");
+                Console.WriteLine("[ERROR] Failed to obtain a valid memory dump.");
             }
 
             Console.WriteLine("\nPress any key to exit...");

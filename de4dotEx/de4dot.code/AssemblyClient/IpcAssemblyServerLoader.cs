@@ -19,6 +19,8 @@
 
 #if NETFRAMEWORK
 using System;
+using System.IO;
+using System.Diagnostics;
 using AssemblyData;
 
 namespace de4dot.code.AssemblyClient {
@@ -42,23 +44,40 @@ namespace de4dot.code.AssemblyClient {
 		}
 
 		static string GetServerName(ServerClrVersion serverVersion) {
+			string currentExe = Process.GetCurrentProcess().MainModule.FileName;
+			string baseDir = Path.GetDirectoryName(currentExe);
+			string exeName = Path.GetFileName(currentExe);
+
 			if (serverVersion == ServerClrVersion.CLR_ANY_ANYCPU)
 				serverVersion = IntPtr.Size == 4 ? ServerClrVersion.CLR_ANY_x86 : ServerClrVersion.CLR_ANY_x64;
-			switch (serverVersion) {
-			case ServerClrVersion.CLR_ANY_x86: return "AssemblyServer.exe";
-			case ServerClrVersion.CLR_ANY_x64: return "AssemblyServer-x64.exe";
-			case ServerClrVersion.CLR_v20_x86: return "AssemblyServer-CLR20.exe";
-			case ServerClrVersion.CLR_v20_x64: return "AssemblyServer-CLR20-x64.exe";
-			case ServerClrVersion.CLR_v40_x86: return "AssemblyServer-CLR40.exe";
-			case ServerClrVersion.CLR_v40_x64: return "AssemblyServer-CLR40-x64.exe";
-			default: throw new ArgumentException($"Invalid server version: {serverVersion}");
+
+			if (serverVersion == ServerClrVersion.CLR_ANY_x86 && IntPtr.Size == 8) {
+				string x86Exe = Path.Combine(baseDir, Path.GetFileNameWithoutExtension(exeName) + "-x86.exe");
+				if (File.Exists(x86Exe)) return x86Exe;
 			}
+			
+			return currentExe;
 		}
 
-		public void LoadServer() => LoadServer(Utils.GetPathOfOurFile(assemblyServerFilename));
+		public void LoadServer() => LoadServer(assemblyServerFilename);
 		public abstract void LoadServer(string filename);
 		public IAssemblyService CreateService() => (IAssemblyService)Activator.GetObject(AssemblyService.GetType(serviceType), url);
 		public abstract void Dispose();
+	}
+}
+#else
+using System;
+using AssemblyData;
+
+namespace de4dot.code.AssemblyClient {
+	public abstract class IpcAssemblyServerLoader : IAssemblyServerLoader {
+		protected AssemblyServiceType serviceType;
+		protected IpcAssemblyServerLoader(AssemblyServiceType serviceType) => this.serviceType = serviceType;
+		protected IpcAssemblyServerLoader(AssemblyServiceType serviceType, ServerClrVersion serverVersion) => this.serviceType = serviceType;
+		public virtual void LoadServer() => throw new NotSupportedException();
+		public virtual void LoadServer(string filename) => throw new NotSupportedException();
+		public virtual IAssemblyService CreateService() => throw new NotSupportedException();
+		public virtual void Dispose() { }
 	}
 }
 #endif
