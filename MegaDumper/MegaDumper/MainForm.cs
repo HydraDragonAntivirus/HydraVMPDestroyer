@@ -2041,10 +2041,12 @@ namespace Mega_Dumper
                 MEMORY_BASIC_INFORMATION mbi;
                 uint mbiSize = (uint)Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION));
 
+                Console.WriteLine($"[INFO] Memory scan range: 0x{currentAddress:X16} - 0x{maxaddress:X16}");
+
                 while (currentAddress < maxaddress && VirtualQueryEx(hProcess, AddrToIntPtr(currentAddress), out mbi, mbiSize) != 0)
                 {
-                    // Log progress occasionally
-                    if (currentAddress % 0x10000000 == 0) 
+                    // Log progress more frequently for x64 (every 1GB)
+                    if (currentAddress % 0x40000000 == 0) 
                         Console.WriteLine($"[INFO] Scanning memory... Current Address: 0x{currentAddress:X16}");
                     // =================== FIX START ===================
                     // We are interested in committed memory that is not guarded and is accessible.
@@ -2091,8 +2093,17 @@ namespace Mega_Dumper
                                             continue;
 
                                         int PEOffset = BitConverter.ToInt32(infokeep, 0);
-                                        if (PEOffset <= 0)
+                                        if (PEOffset <= 0 || PEOffset > 0x1000)
                                             continue;
+
+                                        // Verify 'PE' signature before logging
+                                        byte[] peSig = new byte[4];
+                                        if (ReadProcessMemoryW(hProcess, j + (ulong)k + (ulong)PEOffset, peSig, (UIntPtr)4, out BytesRead) && 
+                                            peSig[0] == 0x50 && peSig[1] == 0x45)
+                                        {
+                                            Console.WriteLine($"[DEBUG] Found valid PE header at 0x{(j + (ulong)k):X16}");
+                                        }
+                                        else continue;
 
                                         // ensure PEOffset falls within our local buffer first, else read from remote
                                         if ((PEOffset + 0x0120) < pagesizeInt)
@@ -2334,7 +2345,7 @@ namespace Mega_Dumper
                                                                     {
                                                                         File.WriteAllBytes(filename, rawdump);
                                                                         sessionDumpedFiles.Add(filename);
-
+                                                                        Console.WriteLine($"[SUCCESS] Raw dumped: {Path.GetFileName(filename)}");
                                                                     }
                                                                     catch
                                                                     {
@@ -2455,7 +2466,8 @@ namespace Mega_Dumper
                                                             fout.Write(virtualdump, 0, rightrawsize);
                                                             fout.Close();
                                                             sessionDumpedFiles.Add(filename);
-
+                                                            string netStatus = isNetAssembly ? "[.NET]" : "[Native]";
+                                                            Console.WriteLine($"[SUCCESS] Virtual dumped {netStatus}: {Path.GetFileName(filename)}");
                                                         }
                                                         CurrentCount++;
                                                     }
@@ -2486,6 +2498,8 @@ namespace Mega_Dumper
                     }
                 }
 
+                Console.WriteLine("[INFO] Memory scan completed successfully.");
+
                 // --- Renaming / Sorting Block ---
                 if (restoreFilename)
                 {
@@ -2497,16 +2511,28 @@ namespace Mega_Dumper
                             {
                                 try
                                 {
+                                    Console.WriteLine($"[DEBUG] Sorting: {fi.Name} (Size: {fi.Length} bytes)");
                                     bool isDotNetFile = false;
                                     try
                                     {
                                         byte[] header = new byte[0x400];
-                                        using (FileStream fs = new FileStream(fi.FullName, FileMode.Open, FileAccess.Read)) { fs.Read(header, 0, 0x400); }
+                                        using (FileStream fs = new FileStream(fi.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) 
+                                        { 
+                                            int read = fs.Read(header, 0, 0x400); 
+                                            if (read < 0x40) throw new Exception("File too small");
+                                        }
+
                                         int pe = BitConverter.ToInt32(header, 0x3C);
-                                        int opt = pe + 4 + 20;
-                                        bool is64 = BitConverter.ToUInt16(header, opt) == 0x20B;
-                                        int dataDir = opt + (is64 ? 112 : 96);
-                                        if (BitConverter.ToUInt32(header, dataDir + (14 * 8)) > 0) isDotNetFile = true;
+                                        if (pe > 0 && pe < 0x3C0)
+                                        {
+                                            int opt = pe + 4 + 20;
+                                            bool is64 = BitConverter.ToUInt16(header, opt) == 0x20B;
+                                            int dataDir = opt + (is64 ? 112 : 96);
+                                            if (dataDir + (14 * 8) + 4 < 0x400) // Safety bound for CLR header directory
+                                            {
+                                                if (BitConverter.ToUInt32(header, dataDir + (14 * 8)) > 0) isDotNetFile = true;
+                                            }
+                                        }
                                     }
                                     catch { }
 
@@ -2523,45 +2549,54 @@ namespace Mega_Dumper
                                         isDotNetFile = false;
                                     }
 
-                                    FileVersionInfo info = FileVersionInfo.GetVersionInfo(fi.FullName);
                                     string finalDir = targetDir;
-
-                                    // If Microsoft -> System Folder
-                                    if (info.CompanyName?.IndexOf("microsoft corporation", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    try 
                                     {
-                                        finalDir = ddirs.sysdirname;
-                                    }
-                                    // If Not .NET and Not System -> Native Folder
-                                    else if (!isDotNetFile)
-                                    {
-                                        finalDir = ddirs.nativedirname;
-                                    }
-
-                                    if (!string.IsNullOrEmpty(info.OriginalFilename))
-                                    {
-                                        string safeName = string.Concat(info.OriginalFilename.Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
-
-                                        string newFilename = Path.Combine(finalDir, safeName);
-
-                                        int count = 2;
-                                        while (File.Exists(newFilename))
+                                        FileVersionInfo info = FileVersionInfo.GetVersionInfo(fi.FullName);
+                                        // If Microsoft -> System Folder
+                                        if (info.CompanyName?.IndexOf("microsoft corporation", StringComparison.OrdinalIgnoreCase) >= 0)
                                         {
-                                            string extension = Path.GetExtension(newFilename) ?? ".dll";
-                                            newFilename = Path.Combine(finalDir, $"{Path.GetFileNameWithoutExtension(safeName)}({count++}){extension}");
+                                            finalDir = ddirs.sysdirname;
                                         }
-                                        File.Move(fi.FullName, newFilename);
+                                        // If Not .NET and Not System -> Native Folder
+                                        else if (!isDotNetFile)
+                                        {
+                                            finalDir = ddirs.nativedirname;
+                                        }
+
+                                        if (!string.IsNullOrEmpty(info.OriginalFilename))
+                                        {
+                                            string safeName = string.Concat(info.OriginalFilename.Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
+                                            string newFilename = Path.Combine(finalDir, safeName);
+                                            int count = 2;
+                                            while (File.Exists(newFilename))
+                                            {
+                                                string extension = Path.GetExtension(newFilename) ?? ".dll";
+                                                newFilename = Path.Combine(finalDir, $"{Path.GetFileNameWithoutExtension(safeName)}({count++}){extension}");
+                                            }
+                                            if (fi.FullName.ToLower() != newFilename.ToLower())
+                                            {
+                                                File.Move(fi.FullName, newFilename);
+                                                Console.WriteLine($"[DEBUG] Moved to {finalDir}: {fi.Name} -> {Path.GetFileName(newFilename)}");
+                                            }
+                                            continue;
+                                        }
                                     }
-                                    else {
-                                        // Force move all unnamed files (vdump/rawdump) to UnknownName folder
-                                        string newFilename = Path.Combine(ddirs.unknowndirname, fi.Name);
-                                        if (File.Exists(newFilename)) File.Delete(newFilename);
-                                        File.Move(fi.FullName, newFilename);
+                                    catch (Exception ex) { Console.WriteLine($"[DEBUG] Metadata check failed for {fi.Name}: {ex.Message}"); }
+
+                                    // Fallback move
+                                    string fallbackDir = isDotNetFile ? targetDir : ddirs.nativedirname;
+                                    string fallbackPath = Path.Combine(fallbackDir, fi.Name);
+                                    if (fi.FullName.ToLower() != fallbackPath.ToLower())
+                                    {
+                                        if (File.Exists(fallbackPath)) File.Delete(fallbackPath);
+                                        File.Move(fi.FullName, fallbackPath);
+                                        Console.WriteLine($"[DEBUG] Moved to {fallbackDir}: {fi.Name}");
                                     }
                                 }
-                                catch
-                                {
-                                    // If anything fails, leave it alone. 
-                                    // DO NOT force move to UnknownName.
+                                catch (Exception ex) 
+                                { 
+                                    Console.WriteLine($"[ERROR] Sorting failed for {fi.Name}: {ex.Message}"); 
                                 }
                             }
                         }

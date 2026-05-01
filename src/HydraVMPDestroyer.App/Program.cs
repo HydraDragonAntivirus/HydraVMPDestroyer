@@ -61,7 +61,8 @@ namespace HydraVMPDestroyer.App
                     string dumpsDir = Path.Combine(outputDir, "dumps");
                     if (Directory.Exists(dumpsDir))
                     {
-                        var files = Directory.GetFiles(dumpsDir, "*.exe");
+                        // Search recursively to find files in Managed/Native/Unknown subfolders
+                        var files = Directory.GetFiles(dumpsDir, "*.exe", SearchOption.AllDirectories);
                         if (files.Length > 0)
                         {
                             currentTarget = files.OrderByDescending(f => new FileInfo(f).Length).First();
