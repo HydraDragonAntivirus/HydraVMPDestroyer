@@ -2379,9 +2379,29 @@ namespace Mega_Dumper
                                                             }
                                                         }
 
+                                                        // --- VMP ANTI-DUMP FIX: Calculate True SizeOfImage ---
+                                                        // VMP spoofs SizeOfImage to be artificially small in memory.
+                                                        // We must find the highest section extent to allocate the correct buffer.
+                                                        int trueSizeOfImage = sizeofimage;
+                                                        for (int l = 0; l < nrofsection; l++)
+                                                        {
+                                                            int sectionExtent = sections[l].virtual_address + sections[l].virtual_size;
+                                                            if (sectionExtent > trueSizeOfImage)
+                                                                trueSizeOfImage = sectionExtent;
+                                                        }
+                                                        
+                                                        // Align to page size to be safe
+                                                        trueSizeOfImage = (trueSizeOfImage + 0xFFF) & ~0xFFF;
+                                                        
+                                                        if (trueSizeOfImage > sizeofimage)
+                                                        {
+                                                            Console.WriteLine($"[WARNING] Detected spoofed SizeOfImage! Fixing: {sizeofimage:X} -> {trueSizeOfImage:X}");
+                                                            sizeofimage = trueSizeOfImage;
+                                                        }
+
                                                         // --- VDUMP BLOCK ---
                                                         byte[] virtualdump = new byte[sizeofimage];
-                                                        Array.Copy(PeHeader, virtualdump, pagesizeInt);
+                                                        Array.Copy(PeHeader, virtualdump, Math.Min(PeHeader.Length, sizeofimage));
 
                                                         int rightrawsize = 0;
                                                         for (int l = 0; l < nrofsection; l++)
@@ -2456,40 +2476,27 @@ namespace Mega_Dumper
                                                             rightrawsize = sizeofimage;
                                                         }
 
-                                                        FixImportandEntryPoint((long)(j + (ulong)k), virtualdump);
+                                                        // VMP Fix: DO NOT attempt to 'fix' the entry point or imports here.
+                                                        // Doing so breaks VMP's native initialization stubs.
+                                                        // FixImportandEntryPoint((long)(j + (ulong)k), virtualdump);
 
                                                         dumpdir = ddirs.dumps;
-
-                                                        filename = dumpdir + "\\vdump_" + (j + (ulong)k).ToString("X");
+                                                        filename = Path.Combine(dumpdir, "vdump_" + (j + (ulong)k).ToString("X") + (IsDll ? ".dll" : ".exe"));
+                                                        
                                                         if (File.Exists(filename))
-                                                            filename = dumpdir + "\\vdump" + CurrentCount.ToString() + "_" + (j + (ulong)k).ToString("X");
-
-                                                        if (IsDll)
-                                                            filename += ".dll";
-                                                        else
-                                                            filename += ".exe";
-
-                                                        FileStream fout = null;
+                                                            filename = Path.Combine(dumpdir, "vdump" + CurrentCount.ToString() + "_" + (j + (ulong)k).ToString("X") + (IsDll ? ".dll" : ".exe"));
 
                                                         try
                                                         {
-                                                            fout = new FileStream(filename, FileMode.Create);
-                                                        }
-                                                        catch
-                                                        {
-                                                            // Cannot show UI from background thread
-                                                        }
-
-                                                        if (fout != null)
-                                                        {
-                                                            if (rightrawsize > virtualdump.Length) rightrawsize = virtualdump.Length;
-
-                                                            fout.Write(virtualdump, 0, rightrawsize);
-                                                            fout.Close();
+                                                            using (FileStream fout = new FileStream(filename, FileMode.Create))
+                                                            {
+                                                                fout.Write(virtualdump, 0, Math.Min(rightrawsize, virtualdump.Length));
+                                                            }
                                                             sessionDumpedFiles.Add(filename);
                                                             string netStatus = isNetAssembly ? "[.NET]" : "[Native]";
                                                             Console.WriteLine($"[SUCCESS] Virtual dumped {netStatus}: {Path.GetFileName(filename)}");
                                                         }
+                                                        catch { }
                                                         CurrentCount++;
                                                     }
                                                 }

@@ -1,142 +1,137 @@
 using System;
+using System.Diagnostics;
 using System.IO;
-using System.Threading.Tasks;
 using System.Linq;
-using HydraVMPDestroyer.App.Unpacker;
-using Mega_Dumper;
-using de4dot.cui;
+using System.Threading.Tasks;
+using MegaDumper;
+using dnlib.DotNet;
+using dnlib.DotNet.Writer;
 
 namespace HydraVMPDestroyer.App
 {
     class Program
     {
-        [STAThread]
         static async Task<int> Main(string[] args)
         {
             Console.WriteLine("=================================================");
             Console.WriteLine("        HydraVMPDestroyer - Unified Tool");
             Console.WriteLine("   VMP Unpacker + MegaDumper + de4dotEx");
             Console.WriteLine("=================================================");
-            Console.WriteLine($"[INFO] Runtime Architecture: {(IntPtr.Size == 4 ? "x86" : "x64")}");
-            Console.WriteLine("[!] Note: Specifically for .NET VMProtect executables.");
-            Console.WriteLine();
 
             if (args.Length < 1)
             {
-                Console.WriteLine("Usage: HydraVMPDestroyer.App <file_path> [--force-dump]");
+                Console.WriteLine("[USAGE] HydraVMPDestroyer.App.exe <target_vmp_exe>");
                 return 1;
             }
 
-            string filePath = Path.GetFullPath(args[0]);
-            bool forceDump = args.Contains("--force-dump");
-
-            if (!File.Exists(filePath))
+            string inputFilePath = Path.GetFullPath(args[0]);
+            if (!File.Exists(inputFilePath))
             {
-                Console.WriteLine($"Error: File '{filePath}' not found.");
+                Console.WriteLine($"[ERROR] File not found: {inputFilePath}");
                 return 1;
             }
 
-            string workDir = Path.GetDirectoryName(filePath) ?? "";
-            string currentTarget = filePath;
-            bool success = false;
+            Console.WriteLine($"[INFO] Runtime Architecture: {(IntPtr.Size == 8 ? "x64" : "x86")}");
+            Console.WriteLine("[!] Note: Specifically for .NET VMProtect executables.");
 
-            Console.WriteLine("[INFO] Direct Dynamic Analysis Mode: Using MegaDumper...");
+            string outputDir = Path.GetDirectoryName(inputFilePath);
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string dumpPath = Path.Combine(outputDir, $"Dumps_{timestamp}");
+            
+            Directory.CreateDirectory(dumpPath);
+
+            Console.WriteLine("\n[INFO] Starting Dynamic Analysis Mode...");
+            
+            ProcessStartInfo startInfo = new ProcessStartInfo(inputFilePath);
+            startInfo.WorkingDirectory = outputDir;
+            
+            Process process = Process.Start(startInfo);
+            Console.WriteLine($"[INFO] Process started (PID: {process.Id}). Waiting 5 seconds for initialization...");
+            await Task.Delay(5000);
+
+            bool success = false;
+            string currentTarget = "";
+
             try
             {
-                using (var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(filePath) { UseShellExecute = true }))
+                Mega_Dumper.MainForm megaDumper = new Mega_Dumper.MainForm();
+                string dumpResult = await megaDumper.DumpProcessByIdCli((uint)process.Id, dumpPath);
+                Console.WriteLine($"[INFO] MegaDumper finished: {dumpResult}");
+                
+                string dumpsDir = Path.Combine(dumpPath, "dumps");
+                if (Directory.Exists(dumpsDir))
                 {
-                    if (process == null) throw new Exception("Failed to start process.");
-
-                    Console.WriteLine($"[INFO] Process started (PID: {process.Id}). Waiting 5 seconds for initialization...");
-                    await Task.Delay(5000);
-
-                    var megaDumper = new Mega_Dumper.MainForm();
-                    megaDumper.EnableDebuggerPrivileges();
-
-                    string outputDir = Path.Combine(workDir, "Dumps_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
-                    Console.WriteLine($"[INFO] Dumping process to: {outputDir}");
+                    // Recursive search for the primary assembly
+                    var files = Directory.GetFiles(dumpsDir, "*.exe", SearchOption.AllDirectories);
                     
-                    string dumpResult = await megaDumper.DumpProcessByIdCli((uint)process.Id, outputDir);
-                    Console.WriteLine($"[INFO] MegaDumper finished with result: {dumpResult}");
-                    
-                    string dumpsDir = Path.Combine(outputDir, "dumps");
-                    if (Directory.Exists(dumpsDir))
+                    // Prioritize files named 'vdump' or the largest exe
+                    string found = files.FirstOrDefault(f => f.ToLower().Contains("vdump")) ?? 
+                                   files.OrderByDescending(f => new FileInfo(f).Length).FirstOrDefault();
+
+                    if (!string.IsNullOrEmpty(found))
                     {
-                        // Find the most likely dump target
-                        string foundTarget = "";
-                        var files = Directory.GetFiles(dumpsDir, "*.*", SearchOption.AllDirectories);
-                        
-                        // Prioritize vdump_*.exe files (virtual dumps) in any directory
-                        foreach (var file in files) {
-                            if (file.ToLower().Contains("vdump") && file.ToLower().EndsWith(".exe")) {
-                                foundTarget = file;
-                                break;
-                            }
-                        }
-
-                        // Fallback to any .exe in the dumps folder if no vdump found
-                        if (string.IsNullOrEmpty(foundTarget)) {
-                            foreach (var file in files) {
-                                if (file.ToLower().EndsWith(".exe")) {
-                                    foundTarget = file;
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        if (!string.IsNullOrEmpty(foundTarget))
-                        {
-                            currentTarget = foundTarget;
-                            Console.WriteLine($"[SUCCESS] Memory dump obtained: {currentTarget}");
-                            success = true;
-                        }
+                        currentTarget = found;
+                        success = true;
                     }
-
-                    if (!process.HasExited) { try { process.Kill(); } catch { } }
                 }
+
+                if (!process.HasExited) { try { process.Kill(); } catch { } }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERROR] MegaDumper failed: {ex.Message}");
+                Console.WriteLine($"[ERROR] Dumping failed: {ex.Message}");
             }
 
             if (success && File.Exists(currentTarget))
             {
-                // Step 1.5: Fix Memory Dump Alignment
-                try
+                // Step 2: Restore Original Filename (CRITICAL for VMP)
+                string originalName = Path.GetFileName(inputFilePath);
+                string renamedFile = Path.Combine(Path.GetDirectoryName(currentTarget), originalName);
+                try 
                 {
-                    FixMemoryDumpAlignment(currentTarget);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[WARNING] Failed to fix dump alignment: {ex.Message}");
-                }
+                    if (File.Exists(renamedFile)) File.Delete(renamedFile);
+                    File.Move(currentTarget, renamedFile);
+                    currentTarget = renamedFile;
+                    Console.WriteLine($"[SUCCESS] Renamed dump to: {originalName}");
+                } catch { }
 
-                // Step 2: de4dotEx
-                Console.WriteLine();
-                Console.WriteLine($"[INFO] Running de4dotEx on memory dump: {currentTarget}");
+                // VMP ANTI-TAMPER FIX: Do NOT normalize the assembly with dnlib here!
+                // VMP's .cctor hashes the PE headers. Any structural changes (even fixing alignments)
+                // triggers the Anti-Tamper, causing the dictionary to remain empty (KeyNotFoundException).
+                // We pass the raw dump directly to de4dotEx.
+
+                // Step 3: Deobfuscate
+                Console.WriteLine("\n[INFO] Running de4dotEx...");
                 
-                string[] de4dotArgs = new string[] { 
-                    currentTarget, 
-                    "--un-name", "true", 
-                    "--strtyp", "delegate", 
-                    "--strtok", "static",
-                    "--strtyp", "emulate"
-                };
-
-                int exitCode = de4dot.cui.Program.Main(de4dotArgs);
-                if (exitCode == 0)
+                string de4dotDllPath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\..\..\..\..\de4dotEx\Debug\net8.0\de4dot.cui.dll"));
+                
+                if (!File.Exists(de4dotDllPath))
                 {
-                    Console.WriteLine("[SUCCESS] Deobfuscation complete.");
+                    Console.WriteLine($"[ERROR] Could not find de4dotEx at: {de4dotDllPath}");
                 }
                 else
                 {
-                    Console.WriteLine("[ERROR] de4dotEx failed to process the memory dump.");
+                    string de4dotArgs = $"\"{de4dotDllPath}\" --un-name true --strtyp emulate --strtok true --delegate-to-method true --proxy-calls true --file \"{currentTarget}\"";
+                    
+                    try
+                    {
+                        var de4dotProc = Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "dotnet",
+                            Arguments = de4dotArgs,
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            CreateNoWindow = true
+                        });
+                        Console.WriteLine(de4dotProc.StandardOutput.ReadToEnd());
+                        de4dotProc.WaitForExit();
+                    }
+                    catch (Exception ex) { Console.WriteLine($"[ERROR] de4dotEx error: {ex.Message}"); }
                 }
             }
             else
             {
-                Console.WriteLine("[ERROR] Failed to obtain a valid memory dump.");
+                Console.WriteLine("[ERROR] Pipeline aborted: No valid dump found.");
             }
 
             Console.WriteLine("\n[SUCCESS] Pipeline finished. Press any key to exit...");
@@ -145,79 +140,26 @@ namespace HydraVMPDestroyer.App
             return 0;
         }
 
-        private static void FixMemoryDumpAlignment(string filePath)
+        private static void NormalizeAssembly(string filePath)
         {
-            Console.WriteLine($"[INFO] Normalizing assembly with dnlib: {Path.GetFileName(filePath)}");
-            
+            Console.WriteLine($"[INFO] Normalizing with dnlib: {Path.GetFileName(filePath)}");
             try
             {
-                // Load with dnlib (it's very tolerant of bad headers)
-                using (var module = dnlib.DotNet.ModuleDefMD.Load(filePath))
+                using (var module = ModuleDefMD.Load(filePath))
                 {
-                    string tempPath = filePath + ".tmp";
+                    var options = new ModuleWriterOptions(module);
+                    options.MetadataOptions.Flags |= MetadataFlags.KeepOldMaxStack;
+                    options.Logger = DummyLogger.NoThrowInstance;
                     
-                    // We rewrite the file. dnlib will automatically fix:
-                    // 1. Section alignments
-                    // 2. File alignment
-                    // 3. Metadata pointers
-                    // 4. Invalid EntryPoint (if any)
-                    
-                    var writerOptions = new dnlib.DotNet.Writer.ModuleWriterOptions(module);
-                    writerOptions.MetadataOptions.Flags |= dnlib.DotNet.Writer.MetadataFlags.KeepOldMaxStack;
-                    writerOptions.Logger = dnlib.DotNet.DummyLogger.NoThrowInstance;
-                    
-                    module.Write(tempPath, writerOptions);
-                    
-                    // Replace original with normalized version
+                    // VMP Fix: We don't touch EntryPoint here, just let dnlib fix the RVAs/Layout
+                    string temp = filePath + ".tmp";
+                    module.Write(temp, options);
                     File.Delete(filePath);
-                    File.Move(tempPath, filePath);
+                    File.Move(temp, filePath);
                 }
-                Console.WriteLine("[SUCCESS] Assembly normalized successfully.");
+                Console.WriteLine("[SUCCESS] Normalization complete.");
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[WARNING] dnlib normalization failed: {ex.Message}. Attempting manual fallback...");
-                ManualFixAlignment(filePath);
-            }
-        }
-
-        private static void ManualFixAlignment(string filePath)
-        {
-            byte[] data = File.ReadAllBytes(filePath);
-            if (data.Length < 0x200) return;
-            // ... (rest of the manual logic if needed, but dnlib is preferred)
-            // For now, I'll keep the previous manual logic as a fallback
-            InternalManualFix(data, filePath);
-        }
-
-        private static void InternalManualFix(byte[] data, string filePath)
-        {
-            int peHeaderOffset = BitConverter.ToInt32(data, 0x3C);
-            int optionalHeaderOffset = peHeaderOffset + 4 + 20;
-            
-            bool is64Bit = BitConverter.ToUInt16(data, optionalHeaderOffset) == 0x20B;
-            Console.WriteLine($"[INFO] Manual Fix - Detected Dump Bitness: {(is64Bit ? "x64" : "x86 (32-bit)")}");
-
-            int sectionAlignment = BitConverter.ToInt32(data, optionalHeaderOffset + 32);
-            
-            // Set FileAlignment = SectionAlignment
-            Buffer.BlockCopy(BitConverter.GetBytes(sectionAlignment), 0, data, optionalHeaderOffset + 36, 4);
-            // Zero out EntryPoint
-            Buffer.BlockCopy(new byte[4], 0, data, optionalHeaderOffset + 16, 4);
-
-            int numberOfSections = BitConverter.ToUInt16(data, peHeaderOffset + 4 + 2);
-            int sizeOfOptionalHeader = BitConverter.ToUInt16(data, peHeaderOffset + 4 + 16);
-            int sectionTableOffset = peHeaderOffset + 4 + 20 + sizeOfOptionalHeader;
-
-            for (int i = 0; i < numberOfSections; i++)
-            {
-                int sectionOffset = sectionTableOffset + (i * 40);
-                int virtualAddress = BitConverter.ToInt32(data, sectionOffset + 12);
-                int virtualSize = BitConverter.ToInt32(data, sectionOffset + 8);
-                Buffer.BlockCopy(BitConverter.GetBytes(virtualAddress), 0, data, sectionOffset + 20, 4);
-                Buffer.BlockCopy(BitConverter.GetBytes(virtualSize), 0, data, sectionOffset + 16, 4);
-            }
-            File.WriteAllBytes(filePath, data);
+            catch (Exception ex) { Console.WriteLine($"[WARNING] Normalization skipped: {ex.Message}"); }
         }
     }
 }
