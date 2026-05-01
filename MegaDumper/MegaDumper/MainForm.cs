@@ -417,8 +417,9 @@ namespace Mega_Dumper
                 return "Error: Could not create or access the output directory. Please check permissions and path.";
             }
 
-            // The core dumping logic is already in DumpProcessLogic and is UI-agnostic.
-            string result = await Task.Run(() => DumpProcessLogic(processId, ddirs, true /* dumpNative */, true /* restoreFilename */));
+            // Execute directly. We are already in a Task if called from Program.cs or we can just block.
+            // Using Task.FromResult to keep the signature but avoiding internal Task.Run deadlock.
+            string result = DumpProcessLogic(processId, ddirs, true /* dumpNative */, true /* restoreFilename */);
             return result;
         }
 
@@ -2504,7 +2505,7 @@ namespace Mega_Dumper
                 if (restoreFilename)
                 {
                     Action<string, string> renameFiles = (string sourceDir, string targetDir) => {
-                        if (Directory.Exists(sourceDir))
+                                                        if (Directory.Exists(sourceDir))
                         {
                             DirectoryInfo di = new DirectoryInfo(sourceDir);
                             foreach (FileInfo fi in di.GetFiles())
@@ -2605,6 +2606,7 @@ namespace Mega_Dumper
                     renameFiles(ddirs.dumps, ddirs.dumps);
                 }
 
+                Console.WriteLine($"[INFO] Returning dump result for {ddirs.dumps}...");
                 return (CurrentCount - 1) + " files dumped in directory " + ddirs.dumps;
             }
             finally

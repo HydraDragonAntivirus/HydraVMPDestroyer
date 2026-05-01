@@ -57,6 +57,7 @@ namespace HydraVMPDestroyer.App
                     Console.WriteLine($"[INFO] Dumping process to: {outputDir}");
                     
                     string dumpResult = await megaDumper.DumpProcessByIdCli((uint)process.Id, outputDir);
+                    Console.WriteLine($"[INFO] MegaDumper finished with result: {dumpResult}");
                     
                     string dumpsDir = Path.Combine(outputDir, "dumps");
                     if (Directory.Exists(dumpsDir))
