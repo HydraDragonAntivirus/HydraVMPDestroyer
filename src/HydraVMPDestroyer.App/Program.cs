@@ -141,10 +141,11 @@ namespace HydraVMPDestroyer.App
 
                 // de4dot.cui.dll is copied to the output directory during build
                 string de4dotDllPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "de4dot.cui.dll");
+                string runtimeConfigPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "de4dot.cui.runtimeconfig.json");
 
-                if (!File.Exists(de4dotDllPath))
+                if (!File.Exists(de4dotDllPath) || !File.Exists(runtimeConfigPath))
                 {
-                    // Fallback to the explicit project build path
+                    // Fallback to the explicit project build path where the runtimeconfig is guaranteed to exist
                     de4dotDllPath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\..\..\..\..\de4dotEx\Debug\net8.0\de4dot.cui.dll"));
                 }
 
