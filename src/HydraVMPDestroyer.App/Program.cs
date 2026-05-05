@@ -139,29 +139,28 @@ namespace HydraVMPDestroyer.App
                 // Step 3: Deobfuscate
                 Console.WriteLine("\n[INFO] Running de4dotEx...");
 
-                // de4dot.cui.dll is copied to the output directory during build
-                string de4dotDllPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "de4dot.cui.dll");
-                string runtimeConfigPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "de4dot.cui.runtimeconfig.json");
+                // de4dot.cui.exe is a self-contained executable in the Release build
+                string de4dotExePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "de4dot.cui.exe");
 
-                if (!File.Exists(de4dotDllPath) || !File.Exists(runtimeConfigPath))
+                if (!File.Exists(de4dotExePath))
                 {
-                    // Fallback to the explicit project build path where the runtimeconfig is guaranteed to exist
-                    de4dotDllPath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\..\..\..\..\de4dotEx\Debug\net8.0\de4dot.cui.dll"));
+                    // Fallback to the explicit project build path
+                    de4dotExePath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\..\..\..\..\de4dotEx\Release\net8.0\de4dot.cui.exe"));
                 }
 
-                if (!File.Exists(de4dotDllPath))
+                if (!File.Exists(de4dotExePath))
                 {
-                    Console.WriteLine($"[ERROR] Could not find de4dotEx at: {de4dotDllPath}");
+                    Console.WriteLine($"[ERROR] Could not find de4dotEx at: {de4dotExePath}");
                 }
                 else
                 {
-                    string de4dotArgs = $"\"{de4dotDllPath}\" --un-name true --strtyp emulate --strtok true --delegate-to-method true --proxy-calls true --file \"{currentTarget}\"";
+                    string de4dotArgs = $"--un-name true --strtyp emulate --strtok true --delegate-to-method true --proxy-calls true --file \"{currentTarget}\"";
 
                     try
                     {
                         var de4dotProc = Process.Start(new ProcessStartInfo
                         {
-                            FileName = "dotnet",
+                            FileName = de4dotExePath,
                             Arguments = de4dotArgs,
                             UseShellExecute = false,
                             RedirectStandardOutput = true,
